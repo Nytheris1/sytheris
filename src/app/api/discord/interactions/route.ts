@@ -3,15 +3,14 @@ import { verifyDiscordSignature } from "@/lib/discord/verify";
 import { anilistRequest, pickTitle } from "@/lib/anilist/client";
 import {
   SEARCH_ANIME,
+  SEARCH_CHARACTER,
+  SEARCH_STUDIO,
   RANDOM_ANIME,
   AIRING_SCHEDULE,
+  TOP_ANIME,
+  CURRENT_SEASON,
 } from "@/lib/anilist/queries";
-import type {
-  Anime,
-  Page,
-  AiringScheduleEntry,
-  AiringSchedulePage,
-} from "@/lib/anilist/types";
+import type { Anime, Page } from "@/lib/anilist/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,11 +18,38 @@ export const dynamic = "force-dynamic";
 const SITE_URL =
   process.env.NEXT_PUBLIC_SITE_URL ?? "https://sytheris.vercel.app";
 
-const ACCENT = 0x00e676;
 const DISCORD_API = "https://discord.com/api/v10";
-const VERIFY_ROLE_NAME = "ᴜʏᴇ";
 const VERIFY_CUSTOM_ID = "verify_button";
 
+// ============================================================
+// RENK PALETİ
+// ============================================================
+const C = {
+  green: 0x00e676,
+  amber: 0xf59e0b,
+  red: 0xe02556,
+  purple: 0x8b5cf6,
+  blue: 0x00b4ff,
+  teal: 0x14b8a6,
+  dark: 0x1a1a1f,
+};
+
+function scoreColor(score: number | null): number {
+  if (score == null) return C.dark;
+  if (score >= 85) return C.green;
+  if (score >= 70) return C.amber;
+  if (score >= 50) return C.red;
+  return C.dark;
+}
+
+function scoreBar(score: number): string {
+  const filled = Math.round(score / 10);
+  return "▰".repeat(filled) + "▱".repeat(10 - filled);
+}
+
+// ============================================================
+// TİPLER
+// ============================================================
 interface DiscordOption {
   name: string;
   value: string | number | boolean;
@@ -33,38 +59,43 @@ interface DiscordInteraction {
   type: number;
   id?: string;
   guild_id?: string;
-  member?: {
-    user?: { id: string; username?: string };
-    roles?: string[];
-  };
+  member?: { user?: { id: string; username?: string }; roles?: string[] };
   user?: { id: string; username?: string };
   data?: {
     name?: string;
     custom_id?: string;
-    component_type?: number;
     options?: DiscordOption[];
   };
 }
 
+// ============================================================
+// YARDIMCILAR
+// ============================================================
+function ephemeral(content: string, emoji = "⚠️") {
+  return NextResponse.json({
+    type: 4,
+    data: { content: `${emoji} ${content}`, flags: 64 },
+  });
+}
+
+function stripHtml(s: string) {
+  return s.replace(/<[^>]+>/g, "").trim();
+}
+
+// ============================================================
+// POST HANDLER
+// ============================================================
 export async function POST(req: NextRequest) {
   const signature = req.headers.get("x-signature-ed25519") ?? "";
   const timestamp = req.headers.get("x-signature-timestamp") ?? "";
   const body = await req.text();
 
-  console.log("[discord] incoming", {
-    signature: signature.slice(0, 12),
-    timestamp,
-    len: body.length,
-  });
-
   const publicKey = process.env.DISCORD_PUBLIC_KEY;
   if (!publicKey) {
-    console.error("[discord] DISCORD_PUBLIC_KEY missing");
     return NextResponse.json({ error: "PUBLIC_KEY yok" }, { status: 500 });
   }
 
   if (!verifyDiscordSignature(publicKey, signature, timestamp, body)) {
-    console.error("[discord] signature verification failed");
     return new NextResponse("invalid request signature", { status: 401 });
   }
 
@@ -75,181 +106,53 @@ export async function POST(req: NextRequest) {
     return new NextResponse("bad json", { status: 400 });
   }
 
-  console.log("[discord] type:", payload.type, "data:", JSON.stringify(payload.data ?? {}));
+  // PING
+  if (payload.type === 1) return NextResponse.json({ type: 1 });
 
-  // === PING ===
-  if (payload.type === 1) {
-    return NextResponse.json({ type: 1 });
-  }
-
-  // === SLASH COMMAND ===
+  // SLASH COMMANDS
   if (payload.type === 2) {
     const name = payload.data?.name ?? "";
     const options = payload.data?.options ?? [];
+    const get = (n: string) =>
+      String(options.find((o) => o.name === n)?.value ?? "").trim();
 
-    if (name === "anime") {
-      const query = String(
-        options.find((o) => o.name === "isim")?.value ?? "",
-      ).trim();
-      return handleAnime(query);
+    switch (name) {
+      case "anime":
+        return handleAnime(get("isim"));
+      case "karakter":
+        return handleCharacter(get("isim"));
+      case "studyo":
+        return handleStudio(get("isim"));
+      case "random":
+        return handleRandom();
+      case "sezon":
+        return handleSeason();
+      case "top":
+        return handleTop();
+      case "takvim":
+        return handleCalendar();
+      case "yardim":
+        return handleHelp();
+      default:
+        return ephemeral(`Bilinmeyen komut: /${name}`, "❓");
     }
-    if (name === "random") return handleRandom();
-    if (name === "calendar") return handleCalendar();
-    if (name === "yardim" || name === "yardım" || name === "help") {
-      return handleHelp();
-    }
-
-    return NextResponse.json({
-      type: 4,
-      data: { content: `Bilinmeyen komut: /${name}`, flags: 64 },
-    });
   }
 
-  // === BUTTON / MESSAGE COMPONENT ===
+  // BUTONLAR
   if (payload.type === 3) {
     const customId = payload.data?.custom_id ?? "";
-    console.log("[discord] button click, custom_id =", customId);
-
-    if (customId === VERIFY_CUSTOM_ID) {
-      return handleVerifyButton(payload);
-    }
-
-    return NextResponse.json({
-      type: 4,
-      data: { content: "Bilinmeyen buton.", flags: 64 },
-    });
+    if (customId === VERIFY_CUSTOM_ID) return handleVerifyButton(payload);
+    return ephemeral("Bilinmeyen buton.", "❓");
   }
 
-  // === MODAL SUBMIT (type 5) ===
-  if (payload.type === 5) {
-    return NextResponse.json({
-      type: 4,
-      data: { content: "Form alındı.", flags: 64 },
-    });
-  }
-
-  return NextResponse.json({
-    type: 4,
-    data: { content: `Bilinmeyen etkileşim tipi: ${payload.type}`, flags: 64 },
-  });
+  return ephemeral(`Bilinmeyen etkileşim: ${payload.type}`, "❓");
 }
 
 /* ================================================================
-   DOĞRULAMA BUTONU
-   ================================================================ */
-async function handleVerifyButton(
-  payload: DiscordInteraction,
-): Promise<NextResponse> {
-  const userId = payload.member?.user?.id ?? payload.user?.id;
-  const guildId = payload.guild_id;
-  const botToken = process.env.DISCORD_BOT_TOKEN;
-
-  console.log("[verify] start", { userId, guildId, hasToken: !!botToken });
-
-  if (!userId || !guildId) {
-    return NextResponse.json({
-      type: 4,
-      data: { content: "Kullanıcı/sunucu bilgisi yok.", flags: 64 },
-    });
-  }
-
-  if (!botToken) {
-    return NextResponse.json({
-      type: 4,
-      data: { content: "Bot token yok.", flags: 64 },
-    });
-  }
-
-  try {
-    // Rolleri al
-    const rolesRes = await fetch(`${DISCORD_API}/guilds/${guildId}/roles`, {
-      headers: { Authorization: `Bot ${botToken}` },
-    });
-
-    if (!rolesRes.ok) {
-      const t = await rolesRes.text().catch(() => "");
-      console.error("[verify] roles fetch failed", rolesRes.status, t.slice(0, 200));
-      return NextResponse.json({
-        type: 4,
-        data: {
-          content: "Roller alınamadı. Bot yetkilerini kontrol et.",
-          flags: 64,
-        },
-      });
-    }
-
-    const roles = (await rolesRes.json()) as {
-      id: string;
-      name: string;
-      managed: boolean;
-    }[];
-    const memberRole = roles.find((r) => r.name === VERIFY_ROLE_NAME);
-
-    console.log("[verify] role found:", !!memberRole, memberRole?.id);
-
-    if (!memberRole) {
-      return NextResponse.json({
-        type: 4,
-        data: {
-          content: `"${VERIFY_ROLE_NAME}" adında rol bulunamadı.`,
-          flags: 64,
-        },
-      });
-    }
-
-    // Rolü ekle
-    const addRes = await fetch(
-      `${DISCORD_API}/guilds/${guildId}/members/${userId}/roles/${memberRole.id}`,
-      {
-        method: "PUT",
-        headers: {
-          Authorization: `Bot ${botToken}`,
-        },
-      },
-    );
-
-    console.log("[verify] add role status:", addRes.status);
-
-    if (!addRes.ok) {
-      const t = await addRes.text().catch(() => "");
-      console.error("[verify] add role failed", addRes.status, t.slice(0, 200));
-      return NextResponse.json({
-        type: 4,
-        data: {
-          content:
-            "Rol verilemedi. Botun rolü `ᴜʏᴇ` rolünün üstünde olmalı.",
-          flags: 64,
-        },
-      });
-    }
-
-    return NextResponse.json({
-      type: 4,
-      data: {
-        content:
-          "🌸 **Hoş geldin!** Doğrulandın ve artık tüm kanalları görebilirsin. İyi yolculuklar!",
-        flags: 64,
-      },
-    });
-  } catch (err) {
-    console.error("[verify] error", err);
-    return NextResponse.json({
-      type: 4,
-      data: { content: "Beklenmeyen hata oluştu.", flags: 64 },
-    });
-  }
-}
-
-/* ================================================================
-   ANILIST KOMUTLARI
+   /anime <isim>
    ================================================================ */
 async function handleAnime(query: string): Promise<NextResponse> {
-  if (!query) {
-    return NextResponse.json({
-      type: 4,
-      data: { content: "Bir anime adı yazmalısın. Örnek: `/anime frieren`" },
-    });
-  }
+  if (!query) return ephemeral("Bir anime adı yaz. Örnek: `/anime frieren`", "🔍");
 
   try {
     const res = await anilistRequest<{ Page: Page<Anime> }>(SEARCH_ANIME, {
@@ -260,57 +163,323 @@ async function handleAnime(query: string): Promise<NextResponse> {
     });
 
     const anime = res.Page.media[0];
-    if (!anime) {
-      return NextResponse.json({
-        type: 4,
-        data: { content: `\`${query}\` için sonuç bulunamadı.` },
-      });
-    }
+    if (!anime) return ephemeral(`\`${query}\` için sonuç bulunamadı.`, "🔍");
 
     const title = pickTitle(anime.title);
     const cover = anime.coverImage.extraLarge ?? anime.coverImage.large;
-    const link = `${SITE_URL}/anime/${anime.id}`;
 
     const embed: Record<string, unknown> = {
+      author: {
+        name: "SYTHERIS · Anime",
+        icon_url: `${SITE_URL}/icon-192.png`,
+      },
       title,
-      url: link,
-      color: ACCENT,
-      footer: { text: "SYTHERIS · AniList" },
+      url: `${SITE_URL}/anime/${anime.id}`,
+      color: scoreColor(anime.averageScore),
+      footer: {
+        text: "AniList verisi · sytheris.vercel.app",
+        icon_url: `${SITE_URL}/icon-192.png`,
+      },
+      timestamp: new Date().toISOString(),
     };
 
     if (anime.description) {
-      embed.description = stripHtml(anime.description).slice(0, 380) + "…";
+      embed.description =
+        "> " + stripHtml(anime.description).slice(0, 350) + "…";
     }
     if (cover) embed.thumbnail = { url: cover };
 
     const fields: { name: string; value: string; inline: boolean }[] = [];
+
     if (anime.averageScore != null) {
       fields.push({
-        name: "Puan",
-        value: `${anime.averageScore} / 100`,
+        name: "⭐ Puan",
+        value: `\`${anime.averageScore}\` / 100\n${scoreBar(anime.averageScore)}`,
         inline: true,
       });
     }
     if (anime.seasonYear) {
-      fields.push({ name: "Yıl", value: String(anime.seasonYear), inline: true });
+      fields.push({
+        name: "📅 Yıl",
+        value: `\`${anime.seasonYear}\``,
+        inline: true,
+      });
     }
     if (anime.format) {
-      fields.push({ name: "Format", value: anime.format, inline: true });
+      fields.push({
+        name: "🎬 Format",
+        value: `\`${anime.format}\``,
+        inline: true,
+      });
     }
     if (anime.episodes) {
-      fields.push({ name: "Bölüm", value: String(anime.episodes), inline: true });
+      fields.push({
+        name: "📺 Bölüm",
+        value: `\`${anime.episodes}\``,
+        inline: true,
+      });
     }
+    if (anime.status) {
+      const statusMap: Record<string, string> = {
+        FINISHED: "✅ Tamamlandı",
+        RELEASING: "▶️ Yayında",
+        NOT_YET_RELEASED: "⏳ Yakında",
+        CANCELLED: "❌ İptal",
+        HIATUS: "⏸️ Arada",
+      };
+      fields.push({
+        name: "📌 Durum",
+        value: statusMap[anime.status] ?? anime.status,
+        inline: true,
+      });
+    }
+    if (anime.genres && anime.genres.length > 0) {
+      fields.push({
+        name: "🏷️ Türler",
+        value: anime.genres.slice(0, 5).map((g) => `\`${g}\``).join(" "),
+        inline: false,
+      });
+    }
+
     if (fields.length > 0) embed.fields = fields;
 
-    return NextResponse.json({ type: 4, data: { embeds: [embed] } });
-  } catch {
     return NextResponse.json({
       type: 4,
-      data: { content: "AniList'e ulaşılamadı, sonra tekrar dene." },
+      data: {
+        embeds: [embed],
+        components: [
+          {
+            type: 1,
+            components: [
+              {
+                type: 2,
+                style: 5,
+                label: "Site'de Aç",
+                url: `${SITE_URL}/anime/${anime.id}`,
+                emoji: { name: "🔗" },
+              },
+            ],
+          },
+        ],
+      },
     });
+  } catch {
+    return ephemeral("AniList'e ulaşılamadı.", "❌");
   }
 }
 
+/* ================================================================
+   /karakter <isim>
+   ================================================================ */
+async function handleCharacter(query: string): Promise<NextResponse> {
+  if (!query) return ephemeral("Bir karakter adı yaz. Örnek: `/karakter frieren`", "🔍");
+
+  try {
+    const res = await anilistRequest<{
+      Page: {
+        characters: {
+          id: number;
+          name: { full: string; native: string | null };
+          image: { large: string | null };
+          description: string | null;
+          favourites: number | null;
+          media: {
+            nodes: {
+              id: number;
+              title: { romaji: string | null; english: string | null; native: string | null };
+              coverImage: { large: string | null; extraLarge: string | null };
+            }[];
+          };
+        }[];
+      };
+    }>(SEARCH_CHARACTER, { search: query });
+
+    const char = res.Page.characters[0];
+    if (!char) return ephemeral(`\`${query}\` adında karakter bulunamadı.`, "🔍");
+
+    const embed: Record<string, unknown> = {
+      author: {
+        name: "SYTHERIS · Karakter",
+        icon_url: `${SITE_URL}/icon-192.png`,
+      },
+      title: char.name.full,
+      url: `https://anilist.co/character/${char.id}`,
+      color: C.purple,
+      footer: { text: "AniList · sytheris.vercel.app" },
+      timestamp: new Date().toISOString(),
+    };
+
+    if (char.name.native) {
+      embed.description = `**${char.name.native}**\n\n`;
+    }
+    if (char.description) {
+      const clean = stripHtml(char.description).slice(0, 300);
+      embed.description = (embed.description ?? "") + `> ${clean}…`;
+    }
+    if (char.image.large) embed.thumbnail = { url: char.image.large };
+
+    const fields: { name: string; value: string; inline: boolean }[] = [];
+
+    if (char.favourites != null) {
+      fields.push({
+        name: "💜 Favori",
+        value: `\`${char.favourites.toLocaleString("tr-TR")}\``,
+        inline: true,
+      });
+    }
+
+    if (char.media.nodes.length > 0) {
+      const appears = char.media.nodes
+        .slice(0, 3)
+        .map((m) => `• **${pickTitle(m.title)}**`)
+        .join("\n");
+      fields.push({
+        name: "🎬 Göründüğü Yapımlar",
+        value: appears,
+        inline: false,
+      });
+    }
+
+    if (fields.length > 0) embed.fields = fields;
+
+    return NextResponse.json({
+      type: 4,
+      data: {
+        embeds: [embed],
+        components: [
+          {
+            type: 1,
+            components: [
+              {
+                type: 2,
+                style: 5,
+                label: "AniList'te Aç",
+                url: `https://anilist.co/character/${char.id}`,
+                emoji: { name: "🔗" },
+              },
+            ],
+          },
+        ],
+      },
+    });
+  } catch {
+    return ephemeral("AniList'e ulaşılamadı.", "❌");
+  }
+}
+
+/* ================================================================
+   /studyo <isim>
+   ================================================================ */
+async function handleStudio(query: string): Promise<NextResponse> {
+  if (!query) return ephemeral("Bir stüdyo adı yaz. Örnek: `/studyo mappa`", "🔍");
+
+  try {
+    const res = await anilistRequest<{
+      Page: {
+        studios: {
+          id: number;
+          name: string;
+          isAnimationStudio: boolean;
+          favourites: number | null;
+          media: {
+            nodes: {
+              id: number;
+              title: { romaji: string | null; english: string | null; native: string | null };
+              coverImage: { large: string | null; extraLarge: string | null };
+              averageScore: number | null;
+              seasonYear: number | null;
+              format: string | null;
+            }[];
+          };
+        }[];
+      };
+    }>(SEARCH_STUDIO, { search: query });
+
+    const studio = res.Page.studios[0];
+    if (!studio) return ephemeral(`\`${query}\` adında stüdyo bulunamadı.`, "🔍");
+
+    const embed: Record<string, unknown> = {
+      author: {
+        name: "SYTHERIS · Stüdyo",
+        icon_url: `${SITE_URL}/icon-192.png`,
+      },
+      title: studio.name,
+      url: `https://anilist.co/studio/${studio.id}`,
+      color: C.blue,
+      footer: { text: "AniList · sytheris.vercel.app" },
+      timestamp: new Date().toISOString(),
+    };
+
+    const fields: { name: string; value: string; inline: boolean }[] = [];
+
+    if (studio.isAnimationStudio) {
+      fields.push({
+        name: "🎨 Tip",
+        value: "`Animasyon Stüdyosu`",
+        inline: true,
+      });
+    }
+    if (studio.favourites != null) {
+      fields.push({
+        name: "💜 Favori",
+        value: `\`${studio.favourites.toLocaleString("tr-TR")}\``,
+        inline: true,
+      });
+    }
+
+    if (studio.media.nodes.length > 0) {
+      const works = studio.media.nodes
+        .slice(0, 5)
+        .map((m) => {
+          const t = pickTitle(m.title);
+          const score = m.averageScore ? ` · ⭐ ${m.averageScore}` : "";
+          const year = m.seasonYear ? ` (${m.seasonYear})` : "";
+          return `• **${t}**${year}${score}`;
+        })
+        .join("\n");
+      fields.push({
+        name: "🏆 Popüler Yapımlar",
+        value: works,
+        inline: false,
+      });
+    }
+
+    if (fields.length > 0) embed.fields = fields;
+
+    // İlk yapıtın kapağını thumbnail yap
+    const firstCover =
+      studio.media.nodes[0]?.coverImage.extraLarge ??
+      studio.media.nodes[0]?.coverImage.large;
+    if (firstCover) embed.thumbnail = { url: firstCover };
+
+    return NextResponse.json({
+      type: 4,
+      data: {
+        embeds: [embed],
+        components: [
+          {
+            type: 1,
+            components: [
+              {
+                type: 2,
+                style: 5,
+                label: "AniList'te Aç",
+                url: `https://anilist.co/studio/${studio.id}`,
+                emoji: { name: "🔗" },
+              },
+            ],
+          },
+        ],
+      },
+    });
+  } catch {
+    return ephemeral("AniList'e ulaşılamadı.", "❌");
+  }
+}
+
+/* ================================================================
+   /random
+   ================================================================ */
 async function handleRandom(): Promise<NextResponse> {
   try {
     const res = await anilistRequest<{ Page: Page<Anime> }>(RANDOM_ANIME, {
@@ -320,113 +489,356 @@ async function handleRandom(): Promise<NextResponse> {
     });
 
     const items = res.Page.media ?? [];
-    if (items.length === 0) {
-      return NextResponse.json({
-        type: 4,
-        data: { content: "Şu an rastgele öneri bulunamadı." },
-      });
-    }
+    if (items.length === 0) return ephemeral("Rastgele öneri bulunamadı.", "🎲");
 
     const anime = items[Math.floor(Math.random() * items.length)];
     const title = pickTitle(anime.title);
     const cover = anime.coverImage.extraLarge ?? anime.coverImage.large;
 
     const embed: Record<string, unknown> = {
+      author: {
+        name: "SYTHERIS · Rastgele Keşif",
+        icon_url: `${SITE_URL}/icon-192.png`,
+      },
       title,
       url: `${SITE_URL}/anime/${anime.id}`,
-      color: ACCENT,
-      footer: { text: "SYTHERIS · Rastgele" },
+      color: scoreColor(anime.averageScore),
+      footer: { text: "🎲 Kaderin seçimi · sytheris.vercel.app" },
+      timestamp: new Date().toISOString(),
     };
+
     if (anime.description) {
-      embed.description = stripHtml(anime.description).slice(0, 380) + "…";
+      embed.description = "> " + stripHtml(anime.description).slice(0, 350) + "…";
     }
     if (cover) embed.thumbnail = { url: cover };
-    if (anime.averageScore != null) {
-      embed.fields = [
-        { name: "Puan", value: `${anime.averageScore} / 100`, inline: true },
-        { name: "Yıl", value: String(anime.seasonYear ?? "—"), inline: true },
-      ];
-    }
 
-    return NextResponse.json({ type: 4, data: { embeds: [embed] } });
-  } catch {
+    const fields: { name: string; value: string; inline: boolean }[] = [];
+    if (anime.averageScore != null) {
+      fields.push({
+        name: "⭐ Puan",
+        value: `\`${anime.averageScore}\` / 100\n${scoreBar(anime.averageScore)}`,
+        inline: true,
+      });
+    }
+    if (anime.seasonYear) {
+      fields.push({ name: "📅 Yıl", value: `\`${anime.seasonYear}\``, inline: true });
+    }
+    if (anime.format) {
+      fields.push({ name: "🎬 Format", value: `\`${anime.format}\``, inline: true });
+    }
+    if (fields.length > 0) embed.fields = fields;
+
     return NextResponse.json({
       type: 4,
-      data: { content: "Rastgele öneri alınamadı." },
+      data: {
+        embeds: [embed],
+        components: [
+          {
+            type: 1,
+            components: [
+              {
+                type: 2,
+                style: 5,
+                label: "Site'de Aç",
+                url: `${SITE_URL}/anime/${anime.id}`,
+                emoji: { name: "🔗" },
+              },
+              {
+                type: 2,
+                style: 1,
+                label: "Tekrar Çevir",
+                custom_id: "random_again",
+                emoji: { name: "🎲" },
+              },
+            ],
+          },
+        ],
+      },
     });
+  } catch {
+    return ephemeral("Rastgele öneri alınamadı.", "❌");
   }
 }
 
+/* ================================================================
+   /sezon
+   ================================================================ */
+function getCurrentSeason(): { season: string; year: number; label: string } {
+  const now = new Date();
+  const m = now.getMonth();
+  const y = now.getFullYear();
+  const season = m < 3 ? "WINTER" : m < 6 ? "SPRING" : m < 9 ? "SUMMER" : "FALL";
+  const labels: Record<string, string> = {
+    WINTER: "❄️ Kış",
+    SPRING: "🌸 İlkbahar",
+    SUMMER: "☀️ Yaz",
+    FALL: "🍂 Sonbahar",
+  };
+  return { season, year: y, label: labels[season] };
+}
+
+async function handleSeason(): Promise<NextResponse> {
+  try {
+    const { season, year, label } = getCurrentSeason();
+    const res = await anilistRequest<{ Page: Page<Anime> }>(CURRENT_SEASON, {
+      season,
+      seasonYear: year,
+      perPage: 10,
+    });
+
+    const items = res.Page.media ?? [];
+    if (items.length === 0) return ephemeral("Bu sezon için veri yok.", "📺");
+
+    const description = items
+      .slice(0, 10)
+      .map((a, i) => {
+        const t = pickTitle(a.title);
+        const score = a.averageScore ? ` · ⭐ ${a.averageScore}` : "";
+        const fmt = a.format ? ` · \`${a.format}\`` : "";
+        return `**\`${String(i + 1).padStart(2, "0")}\`** · [${t}](${SITE_URL}/anime/${a.id})${score}${fmt}`;
+      })
+      .join("\n");
+
+    const embed = {
+      author: {
+        name: `SYTHERIS · ${label} ${year}`,
+        icon_url: `${SITE_URL}/icon-192.png`,
+      },
+      title: `${label} ${year} Sezonu · Popüler Animeler`,
+      url: `${SITE_URL}/search`,
+      description,
+      color: C.green,
+      footer: { text: "AniList · Popülerlik sıralaması" },
+      timestamp: new Date().toISOString(),
+    };
+
+    return NextResponse.json({ type: 4, data: { embeds: [embed] } });
+  } catch {
+    return ephemeral("Sezon verisi alınamadı.", "❌");
+  }
+}
+
+/* ================================================================
+   /top
+   ================================================================ */
+async function handleTop(): Promise<NextResponse> {
+  try {
+    const res = await anilistRequest<{ Page: Page<Anime> }>(TOP_ANIME, {
+      page: 1,
+      perPage: 10,
+    });
+
+    const items = res.Page.media ?? [];
+    if (items.length === 0) return ephemeral("Top liste alınamadı.", "🏆");
+
+    const description = items
+      .map((a, i) => {
+        const t = pickTitle(a.title);
+        const medal =
+          i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `\`${String(i + 1).padStart(2, "0")}\``;
+        return `${medal} · [${t}](${SITE_URL}/anime/${a.id}) · ⭐ **${a.averageScore}**`;
+      })
+      .join("\n");
+
+    const embed = {
+      author: {
+        name: "SYTHERIS · Zirve",
+        icon_url: `${SITE_URL}/icon-192.png`,
+      },
+      title: "🏆 Tüm Zamanların En İyi 10 Animesi",
+      url: `${SITE_URL}/search?sort=SCORE_DESC`,
+      description,
+      color: C.amber,
+      footer: { text: "AniList · Puan sıralaması" },
+      timestamp: new Date().toISOString(),
+    };
+
+    return NextResponse.json({ type: 4, data: { embeds: [embed] } });
+  } catch {
+    return ephemeral("Top liste alınamadı.", "❌");
+  }
+}
+
+/* ================================================================
+   /takvim
+   ================================================================ */
 async function handleCalendar(): Promise<NextResponse> {
   try {
     const now = new Date();
     const from = Math.floor(now.getTime() / 1000);
     const to = from + 24 * 60 * 60;
 
-    const res = await anilistRequest<{ Page: AiringSchedulePage }>(
+    const res = await anilistRequest<{ Page: { airingSchedules: { id: number; episode: number; airingAt: number; media: { id: number; title: { romaji: string | null; english: string | null; native: string | null }; coverImage: { large: string | null; extraLarge: string | null }; format: string | null } }[] } }>(
       AIRING_SCHEDULE,
       { from, to, page: 1, perPage: 10 },
     );
 
     const entries = res.Page.airingSchedules ?? [];
-    if (entries.length === 0) {
-      return NextResponse.json({
-        type: 4,
-        data: { content: "Bugün yayınlanacak bölüm yok." },
-      });
-    }
+    if (entries.length === 0) return ephemeral("Bugün yayınlanacak bölüm yok.", "📺");
 
-    const lines = entries.map((e: AiringScheduleEntry) => {
-      const t = pickTitle(e.media.title);
-      const time = new Date(e.airingAt * 1000).toLocaleTimeString("tr-TR", {
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-      return `\`${time}\` · **${t}** · ${e.episode}. bölüm`;
-    });
+    const description = entries
+      .map((e) => {
+        const t = pickTitle(e.media.title);
+        const time = new Date(e.airingAt * 1000).toLocaleTimeString("tr-TR", {
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+        const fmt = e.media.format ? ` \`${e.media.format}\`` : "";
+        return `\`${time}\` · [**${t}**](${SITE_URL}/anime/${e.media.id}) · Bölüm **${e.episode}**${fmt}`;
+      })
+      .join("\n");
 
-    return NextResponse.json({
-      type: 4,
-      data: {
-        embeds: [
-          {
-            title: "Bugün yayınlanacak bölümler",
-            description: lines.join("\n"),
-            color: ACCENT,
-            footer: { text: "SYTHERIS · Takvim" },
-          },
-        ],
+    const embed = {
+      author: {
+        name: "SYTHERIS · Yayın Akışı",
+        icon_url: `${SITE_URL}/icon-192.png`,
       },
-    });
+      title: "📺 Bugün Yayınlanacak Bölümler",
+      description,
+      color: C.teal,
+      footer: { text: "Önümüzdeki 24 saat · sytheris.vercel.app" },
+      timestamp: new Date().toISOString(),
+    };
+
+    return NextResponse.json({ type: 4, data: { embeds: [embed] } });
   } catch {
-    return NextResponse.json({
-      type: 4,
-      data: { content: "Takvim alınamadı." },
-    });
+    return ephemeral("Takvim alınamadı.", "❌");
   }
 }
 
+/* ================================================================
+   /yardim
+   ================================================================ */
 function handleHelp(): NextResponse {
+  const embed = {
+    author: {
+      name: "SYTHERIS · Komut Rehberi",
+      icon_url: `${SITE_URL}/icon-192.png`,
+    },
+    title: "📖 Komutlar",
+    description: "Aşağıdaki komutları kullanarak alemi keşfedebilirsin.",
+    color: C.green,
+    fields: [
+      {
+        name: "🔍  Keşif",
+        value: [
+          "`/anime <isim>`  ·  Anime ara ve bilgi al",
+          "`/karakter <isim>`  ·  Karakter ara",
+          "`/studyo <isim>`  ·  Stüdyo ara",
+        ].join("\n"),
+        inline: false,
+      },
+      {
+        name: "🎲  Rastgele & Zirve",
+        value: [
+          "`/random`  ·  Kaderin seçimi",
+          "`/top`  ·  En iyi 10 anime",
+          "`/sezon`  ·  Bu sezon popüler",
+        ].join("\n"),
+        inline: false,
+      },
+      {
+        name: "📅  Takvim",
+        value: "`/takvim`  ·  Bugün yayında olan bölümler",
+        inline: false,
+      },
+      {
+        name: "ℹ️  Bilgi",
+        value: "`/yardim`  ·  Bu rehberi göster",
+        inline: false,
+      },
+    ],
+    footer: {
+      text: "SYTHERIS · sytheris.vercel.app",
+      icon_url: `${SITE_URL}/icon-192.png`,
+    },
+    timestamp: new Date().toISOString(),
+  };
+
   return NextResponse.json({
     type: 4,
     data: {
-      embeds: [
+      embeds: [embed],
+      components: [
         {
-          title: "SYTHERIS Komutları",
-          color: ACCENT,
-          description: [
-            "`/anime <isim>` — Anime ara ve bilgi al",
-            "`/random` — Rastgele bir anime öner",
-            "`/calendar` — Bugün yayınlanacak bölümler",
-            "`/yardim` — Bu listeyi göster",
-          ].join("\n"),
-          footer: { text: `Web: ${SITE_URL}` },
+          type: 1,
+          components: [
+            {
+              type: 2,
+              style: 5,
+              label: "Web Sitesi",
+              url: SITE_URL,
+              emoji: { name: "🌐" },
+            },
+            {
+              type: 2,
+              style: 5,
+              label: "Katalog",
+              url: `${SITE_URL}/search`,
+              emoji: { name: "📚" },
+            },
+          ],
         },
       ],
     },
   });
 }
 
-function stripHtml(s: string) {
-  return s.replace(/<[^>]+>/g, "").trim();
+/* ================================================================
+   VERIFY BUTONU
+   ================================================================ */
+async function handleVerifyButton(payload: DiscordInteraction): Promise<NextResponse> {
+  const userId = payload.member?.user?.id ?? payload.user?.id;
+  const guildId = payload.guild_id;
+  const botToken = process.env.DISCORD_BOT_TOKEN;
+
+  if (!userId || !guildId || !botToken) {
+    return ephemeral("Doğrulama başarısız.", "❌");
+  }
+
+  try {
+    const rolesRes = await fetch(`${DISCORD_API}/guilds/${guildId}/roles`, {
+      headers: { Authorization: `Bot ${botToken}` },
+    });
+    if (!rolesRes.ok) return ephemeral("Roller alınamadı.", "❌");
+
+    const roles = (await rolesRes.json()) as { id: string; name: string }[];
+    const memberRole = roles.find((r) => r.name === "ᴜʏᴇ");
+    if (!memberRole) return ephemeral("Doğrulama rolü bulunamadı.", "❌");
+
+    const addRes = await fetch(
+      `${DISCORD_API}/guilds/${guildId}/members/${userId}/roles/${memberRole.id}`,
+      { method: "PUT", headers: { Authorization: `Bot ${botToken}` } },
+    );
+
+    if (!addRes.ok) {
+      return ephemeral(
+        "Rol verilemedi. Yetkililere bildir.",
+        "❌",
+      );
+    }
+
+    return NextResponse.json({
+      type: 4,
+      data: {
+        embeds: [
+          {
+            title: "🌸 Hoş Geldin!",
+            description:
+              "Doğrulandın ve tüm kanallara erişimin açıldı.\n\n" +
+              "**İlk adımlar:**\n" +
+              "`1` · 📜 `ᴋᴜʀᴀʟʟᴀʀ`\n" +
+              "`2` · 🌸 `ᴛᴀɴɪsᴍᴀ`\n" +
+              "`3` · 💬 `sᴏʜʙᴇᴛ`\n\n" +
+              `🌐  ${SITE_URL}`,
+            color: C.green,
+            footer: { text: "SYTHERIS" },
+          },
+        ],
+        flags: 64,
+      },
+    });
+  } catch {
+    return ephemeral("Beklenmeyen hata.", "❌");
+  }
 }

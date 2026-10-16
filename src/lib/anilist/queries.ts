@@ -353,3 +353,87 @@ export const STAFF_DETAIL = /* GraphQL */ `
     }
   }
 `;
+
+
+export const SEARCH_CHARACTER = /* GraphQL */ `
+  query SearchCharacter($search: String) {
+    Page(page: 1, perPage: 1) {
+      characters(search: $search, sort: FAVOURITES_DESC) {
+        id
+        name { full native }
+        image { large }
+        description(asHtml: false)
+        favourites
+        media(page: 1, perPage: 3, sort: POPULARITY_DESC) {
+          nodes {
+            id
+            title { romaji english native }
+            coverImage { large extraLarge }
+          }
+        }
+      }
+    }
+  }
+`;
+
+export const SEARCH_STUDIO = /* GraphQL */ `
+  query SearchStudio($search: String) {
+    Page(page: 1, perPage: 1) {
+      studios(search: $search, sort: FAVOURITES_DESC) {
+        id
+        name
+        isAnimationStudio
+        favourites
+        media(page: 1, perPage: 5, sort: POPULARITY_DESC, isMain: true) {
+          nodes {
+            id
+            title { romaji english native }
+            coverImage { large extraLarge }
+            averageScore
+            seasonYear
+            format
+          }
+        }
+      }
+    }
+  }
+`;
+
+export const TOP_ANIME = /* GraphQL */ `
+  query TopAnime($page: Int, $perPage: Int) {
+    Page(page: $page, perPage: $perPage) {
+      media(type: ANIME, isAdult: false, sort: SCORE_DESC) {
+        id
+        title { romaji english native }
+        coverImage { extraLarge large color }
+        averageScore
+        seasonYear
+        format
+        episodes
+        genres
+      }
+    }
+  }
+`;
+
+export const CURRENT_SEASON = /* GraphQL */ `
+  query CurrentSeason($season: MediaSeason, $seasonYear: Int, $perPage: Int) {
+    Page(page: 1, perPage: $perPage) {
+      media(
+        type: ANIME
+        isAdult: false
+        season: $season
+        seasonYear: $seasonYear
+        sort: POPULARITY_DESC
+      ) {
+        id
+        title { romaji english native }
+        coverImage { extraLarge large color }
+        averageScore
+        format
+        episodes
+        genres
+      }
+    }
+  }
+`;
