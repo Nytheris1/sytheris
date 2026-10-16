@@ -6,11 +6,19 @@ dns.setDefaultResultOrder("ipv4first");
 
 const JIKAN_BASE = "https://api.jikan.moe/v4";
 
-import { unstable_cache } from "next/cache";
+const CACHE_TTL = 5 * 60 * 1000;
+const cache = new Map<number, { at: number; data: unknown }>();
 
 const MIN_INTERVAL = 400;
-// Not: Vercel serverless'ta instance-local throttle etkisizdir.
-// Kalıcı cache için next/cache unstable_cache kullanılır (aşağıda).
+let lastCall = 0;
+async function throttle() {
+  const now = Date.now();
+  const diff = now - lastCall;
+  if (diff < MIN_INTERVAL) {
+    await new Promise((r) => setTimeout(r, MIN_INTERVAL - diff));
+  }
+  lastCall = Date.now();
+}
 
 interface JikanEpisode {
   mal_id: number;
@@ -120,7 +128,12 @@ export async function GET(
 
     const payload = { episodes };
     cache.set(id, { at: Date.now(), data: payload });
-    return NextResponse.json(payload);
+    // Vercel serverless - instance Map yetmez, edge cache gerekir
+    return NextResponse.json(payload, {
+      headers: {
+        "Cache-Control": "public, s-maxage=300, stale-while-revalidate=600",
+      },
+    });
   } catch (err) {
     return NextResponse.json(
       { error: describeError(err) },

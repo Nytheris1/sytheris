@@ -2,13 +2,23 @@
 
 import { useSyncExternalStore } from "react";
 
-const FAV_KEY = "anime.favorites.v1";
-const LIB_KEY = "anime.library.v1";
-const EP_KEY = "anime.episodes.v1";
-const EP_RATING_KEY = "anime.episode-ratings.v1";
-const EP_NOTES_KEY = "anime.episode-notes.v1";
-const REWATCH_KEY = "anime.rewatch.v1";
-const LEGACY_HIST_KEY = "anime.history.v1";
+export const STORAGE_KEYS = {
+  favorites: "anime.favorites.v1",
+  library: "anime.library.v1",
+  episodes: "anime.episodes.v1",
+  episodeRatings: "anime.episode-ratings.v1",
+  episodeNotes: "anime.episode-notes.v1",
+  rewatch: "anime.rewatch.v1",
+  legacyHistory: "anime.history.v1",
+} as const;
+
+const FAV_KEY = STORAGE_KEYS.favorites;
+const LIB_KEY = STORAGE_KEYS.library;
+const EP_KEY = STORAGE_KEYS.episodes;
+const EP_RATING_KEY = STORAGE_KEYS.episodeRatings;
+const EP_NOTES_KEY = STORAGE_KEYS.episodeNotes;
+const REWATCH_KEY = STORAGE_KEYS.rewatch;
+const LEGACY_HIST_KEY = STORAGE_KEYS.legacyHistory;
 
 export interface SavedAnime {
   id: number;
@@ -29,6 +39,8 @@ export type WatchStatus = "watching" | "planned" | "completed" | "dropped";
 export interface LibraryEntry extends SavedAnime {
   status: WatchStatus;
   updatedAt: number;
+  /** "completed" durumuna gectigi an - yil ozeti (wrapped) icin */
+  completedAt?: number;
   rating?: number;
   notes?: string;
 }
@@ -331,15 +343,29 @@ export function toggleFavorite(anime: SavedAnime) {
 
 export function setStatus(anime: SavedAnime, status: WatchStatus) {
   init();
+  const now = Date.now();
   const existing = libSnapshot.find((l) => l.id === anime.id);
   if (existing && existing.status === status) {
     libSnapshot = libSnapshot.filter((l) => l.id !== anime.id);
   } else if (existing) {
     libSnapshot = libSnapshot.map((l) =>
-      l.id === anime.id ? { ...l, ...anime, status, updatedAt: Date.now() } : l,
+      l.id === anime.id
+        ? {
+            ...l,
+            ...anime,
+            status,
+            updatedAt: now,
+            completedAt: status === "completed" ? now : l.completedAt,
+          }
+        : l,
     );
   } else {
-    const entry: LibraryEntry = { ...anime, status, updatedAt: Date.now() };
+    const entry: LibraryEntry = {
+      ...anime,
+      status,
+      updatedAt: now,
+      completedAt: status === "completed" ? now : undefined,
+    };
     libSnapshot = [entry, ...libSnapshot];
   }
   persistLib();

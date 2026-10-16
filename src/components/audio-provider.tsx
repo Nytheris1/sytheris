@@ -25,7 +25,8 @@ const FADE_MS = 320;
 const VOLUME_FADE_MS = 60;
 
 function perceptualGain(v: number): number {
-  return Math.pow(Math.max(0, Math.min(1, v)), 2.2);
+  // 2.2 cok kisiyordu (volume 0.5 -> gain 0.22). 1.6 daha dogal.
+  return Math.pow(Math.max(0, Math.min(1, v)), 1.6);
 }
 
 export type AudioSourceType = "default" | "url" | "file";

@@ -31,9 +31,13 @@ interface CloudUserData {
 
 export async function GET(req: NextRequest) {
   const test = req.nextUrl.searchParams.get("test");
-  const run = req.nextUrl.searchParams.get("run");
   const auth = req.headers.get("authorization");
   const cronSecret = process.env.CRON_SECRET;
+  const authOk = Boolean(cronSecret) && auth === `Bearer ${cronSecret}`;
+
+  if (!authOk) {
+    return NextResponse.json({ ok: false, error: "Yetkisiz" }, { status: 401 });
+  }
 
   /* Test modu */
   if (test === "1") {

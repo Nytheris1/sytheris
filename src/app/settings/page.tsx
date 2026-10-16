@@ -11,7 +11,7 @@ import { LibrarySection } from "@/components/library-section";
 import { useAudio } from "@/components/audio-provider";
 import { useAuth } from "@/components/auth-provider";
 import { useTheme, THEMES } from "@/lib/theme";
-import { useFavorites, useLibrary } from "@/lib/user-data";
+import { useFavorites, useLibrary, STORAGE_KEYS } from "@/lib/user-data";
 import type { Anime } from "@/lib/anilist/types";
 import { cn } from "@/lib/utils";
 
@@ -773,11 +773,17 @@ function DataSection() {
     const data = {
       version: 1,
       exportedAt: new Date().toISOString(),
-      favorites: JSON.parse(localStorage.getItem("anime.favorites.v1") ?? "[]"),
-      library: JSON.parse(localStorage.getItem("anime.library.v1") ?? "[]"),
-      episodes: JSON.parse(localStorage.getItem("anime.episodes.v1") ?? "{}"),
+      favorites: JSON.parse(
+        localStorage.getItem(STORAGE_KEYS.favorites) ?? "[]",
+      ),
+      library: JSON.parse(
+        localStorage.getItem(STORAGE_KEYS.library) ?? "[]",
+      ),
+      episodes: JSON.parse(
+        localStorage.getItem(STORAGE_KEYS.episodes) ?? "{}",
+      ),
       episodeRatings: JSON.parse(
-        localStorage.getItem("anime.episode-ratings.v1") ?? "{}",
+        localStorage.getItem(STORAGE_KEYS.episodeRatings) ?? "{}",
       ),
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], {
@@ -798,19 +804,19 @@ function DataSection() {
       try {
         const data = JSON.parse(e.target?.result as string);
         if (Array.isArray(data.favorites)) {
-          localStorage.setItem("anime.favorites.v1", JSON.stringify(data.favorites));
+          localStorage.setItem(STORAGE_KEYS.favorites, JSON.stringify(data.favorites));
         }
         if (Array.isArray(data.library)) {
-          localStorage.setItem("anime.library.v1", JSON.stringify(data.library));
+          localStorage.setItem(STORAGE_KEYS.library, JSON.stringify(data.library));
         } else if (Array.isArray(data.history)) {
-          localStorage.setItem("anime.library.v1", JSON.stringify(data.history));
+          localStorage.setItem(STORAGE_KEYS.library, JSON.stringify(data.history));
         }
         if (data.episodes && typeof data.episodes === "object") {
-          localStorage.setItem("anime.episodes.v1", JSON.stringify(data.episodes));
+          localStorage.setItem(STORAGE_KEYS.episodes, JSON.stringify(data.episodes));
         }
         if (data.episodeRatings && typeof data.episodeRatings === "object") {
           localStorage.setItem(
-            "anime.episode-ratings.v1",
+            STORAGE_KEYS.episodeRatings,
             JSON.stringify(data.episodeRatings),
           );
         }
@@ -895,7 +901,7 @@ function DataSection() {
             label="Favorileri temizle"
             confirmText="Tüm favoriler silinsin mi?"
             onConfirm={() => {
-              localStorage.removeItem("anime.favorites.v1");
+              localStorage.removeItem(STORAGE_KEYS.favorites);
               window.location.reload();
             }}
             disabled={favorites.length === 0}
@@ -904,7 +910,7 @@ function DataSection() {
             label="Kitaplığı temizle"
             confirmText="Tüm izleme kayıtları silinsin mi?"
             onConfirm={() => {
-              localStorage.removeItem("anime.library.v1");
+              localStorage.removeItem(STORAGE_KEYS.library);
               window.location.reload();
             }}
             disabled={library.length === 0}

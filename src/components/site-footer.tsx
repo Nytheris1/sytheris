@@ -15,7 +15,7 @@ export function SiteFooter() {
             </Link>
             <p className="mt-4 max-w-sm text-sm leading-relaxed text-muted-400">
               Kişisel anime keşif ve araştırma aracı. Favorilerini ve izleme
-              geçmişini tarayıcında saklar; hiçbir veri sunucuya gitmez.
+              geçmişini tarayıcında saklar; hesap açarsan Supabase üzerinden cihazlar arası senkronize edilir.
             </p>
           </div>
 

@@ -48,9 +48,10 @@ function WrappedContent() {
   const stats = useMemo<WrappedStats>(() => {
     const start = new Date(year, 0, 1).getTime();
     const end = new Date(year + 1, 0, 1).getTime();
-    const inYear = library.filter(
-      (l) => l.updatedAt >= start && l.updatedAt < end,
-    );
+    const inYear = library.filter((l) => {
+      const ts = l.completedAt ?? l.updatedAt;
+      return ts >= start && ts < end;
+    });
 
     if (inYear.length === 0) {
       return {
