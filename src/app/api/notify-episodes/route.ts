@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { sendEmail, buildEpisodeEmail } from "@/lib/email/send";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 import { anilistRequest, pickTitle } from "@/lib/anilist/client";
+import {
+  sendEpisodeEmbed,
+  sendDiscordMessage,
+  isDiscordConfigured,
+} from "@/lib/discord/webhook";
 import { RECENT_EPISODES } from "@/lib/anilist/queries";
 import type {
   AiringScheduleEntry,
@@ -61,10 +66,15 @@ export async function GET(req: NextRequest) {
         { status: 500 },
       );
     }
+    const discordResult = await sendDiscordMessage(
+      "**SYTHERIS Test** — Discord webhook çalışıyor! 🎉",
+    );
+
     return NextResponse.json({
       ok: true,
       id: result.id,
-      message: "Test e-postası gönderildi.",
+      discord: discordResult.ok ? "gönderildi" : discordResult.error,
+      message: "Test tamamlandı.",
     });
   }
 
@@ -116,6 +126,7 @@ export async function GET(req: NextRequest) {
 
   let totalNotified = 0;
   const summary: { user: string; emails: number }[] = [];
+  const discordSentEpisodes = new Set<string>();
 
   for (const row of rows as CloudUserData[]) {
     const watching = (row.library ?? []).filter((l) => l.status === "watching");
@@ -179,6 +190,13 @@ export async function GET(req: NextRequest) {
       if (result.ok) {
         updatedNotified[String(ep.media.id)] = ep.episode;
         emailsSent++;
+      }
+
+      // Discord webhook — her bölüm için bir kez
+      const epKey = `${ep.media.id}-${ep.episode}`;
+      if (isDiscordConfigured() && !discordSentEpisodes.has(epKey)) {
+        discordSentEpisodes.add(epKey);
+        await sendEpisodeEmbed(ep).catch(() => {});
       }
     }
 
