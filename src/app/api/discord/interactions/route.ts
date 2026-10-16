@@ -31,12 +31,17 @@ interface DiscordOption {
 
 interface DiscordInteraction {
   type: number;
+  id?: string;
   guild_id?: string;
-  member?: { user?: { id: string } };
-  user?: { id: string };
+  member?: {
+    user?: { id: string; username?: string };
+    roles?: string[];
+  };
+  user?: { id: string; username?: string };
   data?: {
     name?: string;
     custom_id?: string;
+    component_type?: number;
     options?: DiscordOption[];
   };
 }
@@ -46,12 +51,20 @@ export async function POST(req: NextRequest) {
   const timestamp = req.headers.get("x-signature-timestamp") ?? "";
   const body = await req.text();
 
+  console.log("[discord] incoming", {
+    signature: signature.slice(0, 12),
+    timestamp,
+    len: body.length,
+  });
+
   const publicKey = process.env.DISCORD_PUBLIC_KEY;
   if (!publicKey) {
+    console.error("[discord] DISCORD_PUBLIC_KEY missing");
     return NextResponse.json({ error: "PUBLIC_KEY yok" }, { status: 500 });
   }
 
   if (!verifyDiscordSignature(publicKey, signature, timestamp, body)) {
+    console.error("[discord] signature verification failed");
     return new NextResponse("invalid request signature", { status: 401 });
   }
 
@@ -62,12 +75,14 @@ export async function POST(req: NextRequest) {
     return new NextResponse("bad json", { status: 400 });
   }
 
-  // PING
+  console.log("[discord] type:", payload.type, "data:", JSON.stringify(payload.data ?? {}));
+
+  // === PING ===
   if (payload.type === 1) {
     return NextResponse.json({ type: 1 });
   }
 
-  // SLASH COMMAND
+  // === SLASH COMMAND ===
   if (payload.type === 2) {
     const name = payload.data?.name ?? "";
     const options = payload.data?.options ?? [];
@@ -80,20 +95,42 @@ export async function POST(req: NextRequest) {
     }
     if (name === "random") return handleRandom();
     if (name === "calendar") return handleCalendar();
-    if (name === "yardim") return handleHelp();
+    if (name === "yardim" || name === "yardım" || name === "help") {
+      return handleHelp();
+    }
+
+    return NextResponse.json({
+      type: 4,
+      data: { content: `Bilinmeyen komut: /${name}`, flags: 64 },
+    });
   }
 
-  // BUTTON / COMPONENT
+  // === BUTTON / MESSAGE COMPONENT ===
   if (payload.type === 3) {
-    const customId = payload.data?.custom_id;
+    const customId = payload.data?.custom_id ?? "";
+    console.log("[discord] button click, custom_id =", customId);
+
     if (customId === VERIFY_CUSTOM_ID) {
       return handleVerifyButton(payload);
     }
+
+    return NextResponse.json({
+      type: 4,
+      data: { content: "Bilinmeyen buton.", flags: 64 },
+    });
+  }
+
+  // === MODAL SUBMIT (type 5) ===
+  if (payload.type === 5) {
+    return NextResponse.json({
+      type: 4,
+      data: { content: "Form alındı.", flags: 64 },
+    });
   }
 
   return NextResponse.json({
     type: 4,
-    data: { content: "Bilinmeyen istek.", flags: 64 },
+    data: { content: `Bilinmeyen etkileşim tipi: ${payload.type}`, flags: 64 },
   });
 }
 
@@ -107,10 +144,19 @@ async function handleVerifyButton(
   const guildId = payload.guild_id;
   const botToken = process.env.DISCORD_BOT_TOKEN;
 
-  if (!userId || !guildId || !botToken) {
+  console.log("[verify] start", { userId, guildId, hasToken: !!botToken });
+
+  if (!userId || !guildId) {
     return NextResponse.json({
       type: 4,
-      data: { content: "Bir hata oldu.", flags: 64 },
+      data: { content: "Kullanıcı/sunucu bilgisi yok.", flags: 64 },
+    });
+  }
+
+  if (!botToken) {
+    return NextResponse.json({
+      type: 4,
+      data: { content: "Bot token yok.", flags: 64 },
     });
   }
 
@@ -119,14 +165,33 @@ async function handleVerifyButton(
     const rolesRes = await fetch(`${DISCORD_API}/guilds/${guildId}/roles`, {
       headers: { Authorization: `Bot ${botToken}` },
     });
-    const roles = (await rolesRes.json()) as { id: string; name: string }[];
+
+    if (!rolesRes.ok) {
+      const t = await rolesRes.text().catch(() => "");
+      console.error("[verify] roles fetch failed", rolesRes.status, t.slice(0, 200));
+      return NextResponse.json({
+        type: 4,
+        data: {
+          content: "Roller alınamadı. Bot yetkilerini kontrol et.",
+          flags: 64,
+        },
+      });
+    }
+
+    const roles = (await rolesRes.json()) as {
+      id: string;
+      name: string;
+      managed: boolean;
+    }[];
     const memberRole = roles.find((r) => r.name === VERIFY_ROLE_NAME);
+
+    console.log("[verify] role found:", !!memberRole, memberRole?.id);
 
     if (!memberRole) {
       return NextResponse.json({
         type: 4,
         data: {
-          content: "Doğrulama rolü bulunamadı. Yetkililere bildir.",
+          content: `"${VERIFY_ROLE_NAME}" adında rol bulunamadı.`,
           flags: 64,
         },
       });
@@ -137,15 +202,22 @@ async function handleVerifyButton(
       `${DISCORD_API}/guilds/${guildId}/members/${userId}/roles/${memberRole.id}`,
       {
         method: "PUT",
-        headers: { Authorization: `Bot ${botToken}` },
+        headers: {
+          Authorization: `Bot ${botToken}`,
+        },
       },
     );
 
+    console.log("[verify] add role status:", addRes.status);
+
     if (!addRes.ok) {
+      const t = await addRes.text().catch(() => "");
+      console.error("[verify] add role failed", addRes.status, t.slice(0, 200));
       return NextResponse.json({
         type: 4,
         data: {
-          content: "Rol verilemedi. Bot yetkilerini kontrol et.",
+          content:
+            "Rol verilemedi. Botun rolü `ᴜʏᴇ` rolünün üstünde olmalı.",
           flags: 64,
         },
       });
@@ -159,10 +231,11 @@ async function handleVerifyButton(
         flags: 64,
       },
     });
-  } catch {
+  } catch (err) {
+    console.error("[verify] error", err);
     return NextResponse.json({
       type: 4,
-      data: { content: "Beklenmeyen hata.", flags: 64 },
+      data: { content: "Beklenmeyen hata oluştu.", flags: 64 },
     });
   }
 }
@@ -219,28 +292,17 @@ async function handleAnime(query: string): Promise<NextResponse> {
       });
     }
     if (anime.seasonYear) {
-      fields.push({
-        name: "Yıl",
-        value: String(anime.seasonYear),
-        inline: true,
-      });
+      fields.push({ name: "Yıl", value: String(anime.seasonYear), inline: true });
     }
     if (anime.format) {
       fields.push({ name: "Format", value: anime.format, inline: true });
     }
     if (anime.episodes) {
-      fields.push({
-        name: "Bölüm",
-        value: String(anime.episodes),
-        inline: true,
-      });
+      fields.push({ name: "Bölüm", value: String(anime.episodes), inline: true });
     }
     if (fields.length > 0) embed.fields = fields;
 
-    return NextResponse.json({
-      type: 4,
-      data: { embeds: [embed] },
-    });
+    return NextResponse.json({ type: 4, data: { embeds: [embed] } });
   } catch {
     return NextResponse.json({
       type: 4,
@@ -286,10 +348,7 @@ async function handleRandom(): Promise<NextResponse> {
       ];
     }
 
-    return NextResponse.json({
-      type: 4,
-      data: { embeds: [embed] },
-    });
+    return NextResponse.json({ type: 4, data: { embeds: [embed] } });
   } catch {
     return NextResponse.json({
       type: 4,
