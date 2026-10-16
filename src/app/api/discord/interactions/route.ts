@@ -21,9 +21,6 @@ const SITE_URL =
 const DISCORD_API = "https://discord.com/api/v10";
 const VERIFY_CUSTOM_ID = "verify_button";
 
-// ============================================================
-// RENK PALETİ
-// ============================================================
 const C = {
   green: 0x00e676,
   amber: 0xf59e0b,
@@ -47,9 +44,6 @@ function scoreBar(score: number): string {
   return "▰".repeat(filled) + "▱".repeat(10 - filled);
 }
 
-// ============================================================
-// TİPLER
-// ============================================================
 interface DiscordOption {
   name: string;
   value: string | number | boolean;
@@ -68,9 +62,6 @@ interface DiscordInteraction {
   };
 }
 
-// ============================================================
-// YARDIMCILAR
-// ============================================================
 function ephemeral(content: string, emoji = "⚠️") {
   return NextResponse.json({
     type: 4,
@@ -82,9 +73,6 @@ function stripHtml(s: string) {
   return s.replace(/<[^>]+>/g, "").trim();
 }
 
-// ============================================================
-// POST HANDLER
-// ============================================================
 export async function POST(req: NextRequest) {
   const signature = req.headers.get("x-signature-ed25519") ?? "";
   const timestamp = req.headers.get("x-signature-timestamp") ?? "";
@@ -141,7 +129,10 @@ export async function POST(req: NextRequest) {
   // BUTONLAR
   if (payload.type === 3) {
     const customId = payload.data?.custom_id ?? "";
+
     if (customId === VERIFY_CUSTOM_ID) return handleVerifyButton(payload);
+    if (customId.startsWith("hobby_")) return handleHobbyButton(payload, customId);
+
     return ephemeral("Bilinmeyen buton.", "❓");
   }
 
@@ -149,7 +140,7 @@ export async function POST(req: NextRequest) {
 }
 
 /* ================================================================
-   /anime <isim>
+   /anime
    ================================================================ */
 async function handleAnime(query: string): Promise<NextResponse> {
   if (!query) return ephemeral("Bir anime adı yaz. Örnek: `/anime frieren`", "🔍");
@@ -184,8 +175,7 @@ async function handleAnime(query: string): Promise<NextResponse> {
     };
 
     if (anime.description) {
-      embed.description =
-        "> " + stripHtml(anime.description).slice(0, 350) + "…";
+      embed.description = "> " + stripHtml(anime.description).slice(0, 350) + "…";
     }
     if (cover) embed.thumbnail = { url: cover };
 
@@ -199,25 +189,13 @@ async function handleAnime(query: string): Promise<NextResponse> {
       });
     }
     if (anime.seasonYear) {
-      fields.push({
-        name: "📅 Yıl",
-        value: `\`${anime.seasonYear}\``,
-        inline: true,
-      });
+      fields.push({ name: "📅 Yıl", value: `\`${anime.seasonYear}\``, inline: true });
     }
     if (anime.format) {
-      fields.push({
-        name: "🎬 Format",
-        value: `\`${anime.format}\``,
-        inline: true,
-      });
+      fields.push({ name: "🎬 Format", value: `\`${anime.format}\``, inline: true });
     }
     if (anime.episodes) {
-      fields.push({
-        name: "📺 Bölüm",
-        value: `\`${anime.episodes}\``,
-        inline: true,
-      });
+      fields.push({ name: "📺 Bölüm", value: `\`${anime.episodes}\``, inline: true });
     }
     if (anime.status) {
       const statusMap: Record<string, string> = {
@@ -269,10 +247,10 @@ async function handleAnime(query: string): Promise<NextResponse> {
 }
 
 /* ================================================================
-   /karakter <isim>
+   /karakter
    ================================================================ */
 async function handleCharacter(query: string): Promise<NextResponse> {
-  if (!query) return ephemeral("Bir karakter adı yaz. Örnek: `/karakter frieren`", "🔍");
+  if (!query) return ephemeral("Bir karakter adı yaz.", "🔍");
 
   try {
     const res = await anilistRequest<{
@@ -368,10 +346,10 @@ async function handleCharacter(query: string): Promise<NextResponse> {
 }
 
 /* ================================================================
-   /studyo <isim>
+   /studyo
    ================================================================ */
 async function handleStudio(query: string): Promise<NextResponse> {
-  if (!query) return ephemeral("Bir stüdyo adı yaz. Örnek: `/studyo mappa`", "🔍");
+  if (!query) return ephemeral("Bir stüdyo adı yaz.", "🔍");
 
   try {
     const res = await anilistRequest<{
@@ -413,11 +391,7 @@ async function handleStudio(query: string): Promise<NextResponse> {
     const fields: { name: string; value: string; inline: boolean }[] = [];
 
     if (studio.isAnimationStudio) {
-      fields.push({
-        name: "🎨 Tip",
-        value: "`Animasyon Stüdyosu`",
-        inline: true,
-      });
+      fields.push({ name: "🎨 Tip", value: "`Animasyon Stüdyosu`", inline: true });
     }
     if (studio.favourites != null) {
       fields.push({
@@ -437,16 +411,11 @@ async function handleStudio(query: string): Promise<NextResponse> {
           return `• **${t}**${year}${score}`;
         })
         .join("\n");
-      fields.push({
-        name: "🏆 Popüler Yapımlar",
-        value: works,
-        inline: false,
-      });
+      fields.push({ name: "🏆 Popüler Yapımlar", value: works, inline: false });
     }
 
     if (fields.length > 0) embed.fields = fields;
 
-    // İlk yapıtın kapağını thumbnail yap
     const firstCover =
       studio.media.nodes[0]?.coverImage.extraLarge ??
       studio.media.nodes[0]?.coverImage.large;
@@ -668,10 +637,21 @@ async function handleCalendar(): Promise<NextResponse> {
     const from = Math.floor(now.getTime() / 1000);
     const to = from + 24 * 60 * 60;
 
-    const res = await anilistRequest<{ Page: { airingSchedules: { id: number; episode: number; airingAt: number; media: { id: number; title: { romaji: string | null; english: string | null; native: string | null }; coverImage: { large: string | null; extraLarge: string | null }; format: string | null } }[] } }>(
-      AIRING_SCHEDULE,
-      { from, to, page: 1, perPage: 10 },
-    );
+    const res = await anilistRequest<{
+      Page: {
+        airingSchedules: {
+          id: number;
+          episode: number;
+          airingAt: number;
+          media: {
+            id: number;
+            title: { romaji: string | null; english: string | null; native: string | null };
+            coverImage: { large: string | null; extraLarge: string | null };
+            format: string | null;
+          };
+        }[];
+      };
+    }>(AIRING_SCHEDULE, { from, to, page: 1, perPage: 10 });
 
     const entries = res.Page.airingSchedules ?? [];
     if (entries.length === 0) return ephemeral("Bugün yayınlanacak bölüm yok.", "📺");
@@ -792,9 +772,7 @@ async function handleVerifyButton(payload: DiscordInteraction): Promise<NextResp
   const guildId = payload.guild_id;
   const botToken = process.env.DISCORD_BOT_TOKEN;
 
-  if (!userId || !guildId || !botToken) {
-    return ephemeral("Doğrulama başarısız.", "❌");
-  }
+  if (!userId || !guildId || !botToken) return ephemeral("Doğrulama başarısız.", "❌");
 
   try {
     const rolesRes = await fetch(`${DISCORD_API}/guilds/${guildId}/roles`, {
@@ -811,12 +789,7 @@ async function handleVerifyButton(payload: DiscordInteraction): Promise<NextResp
       { method: "PUT", headers: { Authorization: `Bot ${botToken}` } },
     );
 
-    if (!addRes.ok) {
-      return ephemeral(
-        "Rol verilemedi. Yetkililere bildir.",
-        "❌",
-      );
-    }
+    if (!addRes.ok) return ephemeral("Rol verilemedi. Yetkililere bildir.", "❌");
 
     return NextResponse.json({
       type: 4,
@@ -838,6 +811,80 @@ async function handleVerifyButton(payload: DiscordInteraction): Promise<NextResp
         flags: 64,
       },
     });
+  } catch {
+    return ephemeral("Beklenmeyen hata.", "❌");
+  }
+}
+
+/* ================================================================
+   HOBİ ROL BUTONU
+   ================================================================ */
+const HOBBY_MAP: Record<string, { role: string; emoji: string }> = {
+  hobby_anime: { role: "🎴 Anime İzleyicisi", emoji: "🎴" },
+  hobby_manga: { role: "📖 Manga Okuru", emoji: "📖" },
+  hobby_game: { role: "🎮 Oyun Bağımlısı", emoji: "🎮" },
+  hobby_movie: { role: "🎬 Sinema Sever", emoji: "🎬" },
+  hobby_music: { role: "🎵 Müzik Kurdu", emoji: "🎵" },
+  hobby_art: { role: "🎨 Sanatçı", emoji: "🎨" },
+};
+
+async function handleHobbyButton(
+  payload: DiscordInteraction,
+  customId: string,
+): Promise<NextResponse> {
+  const hobby = HOBBY_MAP[customId];
+  if (!hobby) return ephemeral("Bilinmeyen hobi butonu.", "❓");
+
+  const userId = payload.member?.user?.id ?? payload.user?.id;
+  const guildId = payload.guild_id;
+  const botToken = process.env.DISCORD_BOT_TOKEN;
+
+  if (!userId || !guildId || !botToken) return ephemeral("Eksik bilgi.", "❌");
+
+  try {
+    const rolesRes = await fetch(`${DISCORD_API}/guilds/${guildId}/roles`, {
+      headers: { Authorization: `Bot ${botToken}` },
+    });
+    if (!rolesRes.ok) return ephemeral("Roller alınamadı.", "❌");
+
+    const roles = (await rolesRes.json()) as { id: string; name: string }[];
+    const target = roles.find((r) => r.name === hobby.role);
+    if (!target) return ephemeral(`"${hobby.role}" rolü bulunamadı.`, "❌");
+
+    const memberRes = await fetch(
+      `${DISCORD_API}/guilds/${guildId}/members/${userId}`,
+      { headers: { Authorization: `Bot ${botToken}` } },
+    );
+    if (!memberRes.ok) return ephemeral("Üye bilgisi alınamadı.", "❌");
+
+    const member = (await memberRes.json()) as { roles: string[] };
+    const hasRole = member.roles.includes(target.id);
+
+    if (hasRole) {
+      await fetch(
+        `${DISCORD_API}/guilds/${guildId}/members/${userId}/roles/${target.id}`,
+        { method: "DELETE", headers: { Authorization: `Bot ${botToken}` } },
+      );
+      return NextResponse.json({
+        type: 4,
+        data: {
+          content: `${hobby.emoji} **${hobby.role}** rolü kaldırıldı.`,
+          flags: 64,
+        },
+      });
+    } else {
+      await fetch(
+        `${DISCORD_API}/guilds/${guildId}/members/${userId}/roles/${target.id}`,
+        { method: "PUT", headers: { Authorization: `Bot ${botToken}` } },
+      );
+      return NextResponse.json({
+        type: 4,
+        data: {
+          content: `${hobby.emoji} **${hobby.role}** rolü verildi.`,
+          flags: 64,
+        },
+      });
+    }
   } catch {
     return ephemeral("Beklenmeyen hata.", "❌");
   }
