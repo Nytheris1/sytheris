@@ -17,6 +17,7 @@ interface AuthContextValue {
   configured: boolean;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
   signUp: (email: string, password: string) => Promise<{ error: string | null; needsConfirmation: boolean }>;
+  signInWithDiscord: () => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
 }
 
@@ -78,6 +79,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { error: null, needsConfirmation };
   }, []);
 
+  const signInWithDiscord = useCallback(async () => {
+    const supabase = getSupabase();
+    if (!supabase) return { error: "Supabase yapılandırılmamış." };
+    const redirectTo =
+      typeof window !== "undefined"
+        ? `${window.location.origin}/auth/callback`
+        : "/auth/callback";
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "discord",
+      options: {
+        redirectTo,
+        scopes: "identify email",
+      },
+    });
+    return { error: error?.message ?? null };
+  }, []);
+
   const signOut = useCallback(async () => {
     const supabase = getSupabase();
     if (!supabase) return;
@@ -86,7 +104,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <Ctx.Provider
-      value={{ user, session, loading, configured, signIn, signUp, signOut }}
+      value={{
+        user,
+        session,
+        loading,
+        configured,
+        signIn,
+        signUp,
+        signInWithDiscord,
+        signOut,
+      }}
     >
       {children}
     </Ctx.Provider>
@@ -105,6 +132,9 @@ export function useAuth(): AuthContextValue {
       signUp: async () => ({
         error: "Auth sağlayıcısı yok.",
         needsConfirmation: false,
+      }),
+      signInWithDiscord: async () => ({
+        error: "Auth sağlayıcısı yok.",
       }),
       signOut: async () => {},
     };
