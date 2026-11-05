@@ -1,10 +1,16 @@
 import 'server-only'
-import { neon } from '@neondatabase/serverless'
+import { neon, neonConfig } from '@neondatabase/serverless'
 import { promises as fs } from 'fs'
 import path from 'path'
 
+// 🚨 SUPABASE BAĞLANTI AYARLARI 🚨
+// Neon sürücüsünün standart Postgres (Supabase) bağlantı havuzlarıyla çalışması için:
+neonConfig.pipelineConnect = false;
+// Vercel Node.js ortamında global WebSocket bazen bulunmaz, fetch'e zorluyoruz:
+neonConfig.fetchConnectionCache = true;
+
 /**
- * Minimal key/value store. Uses Postgres (Neon) when DATABASE_URL is present,
+ * Minimal key/value store. Uses Postgres (Neon/Supabase) when DATABASE_URL is present,
  * otherwise falls back to a JSON file in the OS temp dir so the app keeps working
  * in development and previews without a database.
  */
